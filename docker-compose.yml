@@ -1,15 +1,39 @@
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: coach
+      POSTGRES_USER: coach
+      POSTGRES_PASSWORD: coach
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coach"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
       target: dev
     volumes:
       - ./backend:/app
-      - backend_db:/app/data
+      - recordings_data:/data/recordings
     ports:
-      - "8000:8000"
+      - "8013:8000"
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////app/data/daily_tasks.db
+      DATABASE_URL: postgresql+asyncpg://coach:coach@postgres:5432/coach
+      SCRIBE_API_URL: http://scribe-api:8012
+      SCRIBE_API_KEY: ${SCRIBE_API_KEY:-changeme}
+      FILE_STORAGE_PATH: /data/recordings
+      MAX_UPLOAD_SIZE_MB: 1000
+      API_KEY: ${API_KEY:-changeme}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -19,11 +43,12 @@ services:
       - ./frontend:/app
       - /app/node_modules
     ports:
-      - "3000:3000"
+      - "3013:3000"
     environment:
-      NUXT_PUBLIC_API_BASE: http://backend:8000
+      NUXT_PUBLIC_API_BASE: https://ee-coach-app-api.expertecho.ai
     depends_on:
       - backend
 
 volumes:
-  backend_db:
+  postgres_data:
+  recordings_data:

@@ -30,7 +30,7 @@ It consists of a FastAPI backend and a Nuxt 3 frontend, backed by a Postgres dat
 
 ### Infrastructure
 - Docker + Docker Compose
-- Scribe API runs as a separate service (see scribe-api repo)
+- Scribe API runs as a separate service (separate repo), exposed on port 8012
 
 ---
 
@@ -61,6 +61,8 @@ It consists of a FastAPI backend and a Nuxt 3 frontend, backed by a Postgres dat
   status accordingly via a background polling task.
 - Single user for now — no multi-tenancy. Auth is a simple API key on the backend.
 - Accuracy of extracted data matters more than processing speed.
+- Jobs can take a very long time on CPU (up to 2 hours for JOB_TIMEOUT). The polling loop
+  must be patient and must not time out prematurely.
 
 ---
 
@@ -242,26 +244,98 @@ GET    /api/recordings/{id}/queries     # List all queries for a recording
 
 ## Scribe API Integration
 
-The `scribe_client.py` module wraps all communication with the Scribe API.
+All communication with Scribe API is handled in `scribe_client.py`.
 
-**Dispatch flow:**
+### Authentication
+Every request to Scribe API must include the API key as a header:
+```
+X-API-Key: {SCRIBE_API_KEY}
+```
+The key is stored in `SCRIBE_API_KEY` env var and must never be hardcoded.
+
+### Rate Limiting
+Scribe API enforces a limit of 30 requests per minute. The scribe client must handle
+429 responses gracefully — back off and retry, do not crash.
+
+### Scribe API Endpoints Used by Coach App
+
+#### POST /process (multipart file upload)
+Used when dispatching a new recording for transcription + extraction.
+```
+Form fields:
+  file     — the audio/video file (UploadFile)
+  prompt   — the resolved prompt_template from the CallType
+  language — defaults to "en"
+
+Response: { "job_id": "string" }
+```
+
+#### POST /process-url (S3 presigned URL)
+Alternative to file upload — use this if the recording file is stored in S3.
+```json
+{
+  "s3_url": "https://...",
+  "prompt": "...",
+  "language": "en"
+}
+Response: { "job_id": "string" }
+```
+
+#### POST /extract (ad-hoc query)
+Used when the user asks a follow-up question against an existing transcript.
+```json
+{
+  "transcript": "full transcript text...",
+  "prompt": "user's question"
+}
+Response: { "job_id": "string" }
+```
+
+#### GET /job/{job_id} (polling)
+Used to check the status of any queued job.
+```json
+Response: {
+  "job_id": "string",
+  "status": "pending | processing | complete | failed",
+  "transcript": "string | null",
+  "extraction": "dict | null",
+  "error": "string | null",
+  "created_at": "datetime",
+  "completed_at": "datetime | null"
+}
+```
+
+#### GET /health
+Used to check Scribe API availability before dispatching jobs.
+```json
+Response: {
+  "status": "ok",
+  "queue_depth": 0,
+  "whisper_ready": true,
+  "ollama_ready": true
+}
+```
+
+### Dispatch Flow (file upload)
 1. User uploads file — Coach App saves file locally — creates Recording (status: pending)
 2. Coach App looks up the CallType's `prompt_template`
-3. Coach App POSTs file + prompt to Scribe API POST /process
-4. Scribe API returns `job_id` — stored on Recording as `scribe_job_id`, status set to processing
-5. Background polling task calls GET /job/{id} every 60 seconds
-6. On completion — save Transcript and Extraction — Recording status set to complete
+3. Coach App POSTs file + prompt to Scribe API `POST /process`
+4. Scribe API returns `{ job_id }` — stored on Recording as `scribe_job_id`, status → processing
+5. Background polling task calls `GET /job/{job_id}` every 60 seconds
+6. On complete — save Transcript and Extraction — Recording status → complete
+7. On failed — Recording status → failed, store error message
 
-**Ad-hoc query flow:**
+### Ad-hoc Query Flow
 1. User submits a question on the recording detail page
-2. Coach App sends POST /extract to Scribe API with transcript + question as prompt
-3. Polls for result — saves Query record — returns answer to UI
+2. Coach App sends `POST /extract` with transcript + question as prompt
+3. Returns `{ job_id }` — polls until complete
+4. Saves Query record with question + answer — returns answer to UI
 
-**Config:**
-```
-SCRIBE_API_URL=http://scribe-api:8000
-SCRIBE_POLL_INTERVAL_SECONDS=60
-```
+### Polling Timeout
+Jobs can take up to 2 hours (Scribe API JOB_TIMEOUT=7200). The polling loop must:
+- Poll every 60 seconds
+- Not give up until status is `complete` or `failed`
+- Surface `failed` status clearly in the UI with the error message
 
 ---
 
@@ -312,7 +386,8 @@ Create these on first run via an Alembic seed or startup event:
 
 ### Recording Detail (/recordings/[id])
 - Metadata header (call type, client, date, duration)
-- Status badge with polling if still processing
+- Status badge — polls backend every 30 seconds if status is processing
+- Clear failed state with error message if processing failed
 - Transcript tab — full scrollable transcript text
 - Extraction tab — renders the structured JSON result in a readable format
 - Queries tab — text input to ask follow-up questions, list of previous Q&As
@@ -342,11 +417,12 @@ Create these on first run via an Alembic seed or startup event:
 ### Backend
 ```
 DATABASE_URL=postgresql+asyncpg://coach:coach@postgres:5432/coach
-SCRIBE_API_URL=http://scribe-api:8000
+SCRIBE_API_URL=http://scribe-api:8012
+SCRIBE_API_KEY=                        # Must match Scribe API's API_KEY value
 SCRIBE_POLL_INTERVAL_SECONDS=60
 FILE_STORAGE_PATH=/data/recordings
 MAX_UPLOAD_SIZE_MB=1000
-API_KEY=changeme
+API_KEY=changeme                       # Coach App's own API key for its endpoints
 ```
 
 ### Frontend
@@ -369,3 +445,4 @@ NUXT_PUBLIC_API_BASE=http://localhost:8001
 - Always include type hints on all backend functions and methods
 - Always include tests (pytest) for new backend features — run via `uv run pytest`
 - All Python execution must happen via `uv run` to ensure the correct locked environment
+- Never log or expose SCRIBE_API_KEY in responses or error messages

@@ -2,20 +2,24 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.db.session import engine
-from app.db.base import Base
+from app.api.routes import call_types, extractions, queries, recordings, transcripts
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Tables are managed exclusively by Alembic migrations.
     yield
 
 
-app = FastAPI(title="Daily Tasks API", lifespan=lifespan)
+app = FastAPI(title="Coach App API", version="0.1.0", lifespan=lifespan)
+
+app.include_router(call_types.router, prefix="/api")
+app.include_router(recordings.router, prefix="/api")
+app.include_router(transcripts.router, prefix="/api")
+app.include_router(extractions.router, prefix="/api")
+app.include_router(queries.router, prefix="/api")
 
 
-@app.get("/")
-async def health_check() -> dict[str, str]:
+@app.get("/health", tags=["health"])
+async def health() -> dict[str, str]:
     return {"status": "ok"}

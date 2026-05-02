@@ -6,13 +6,16 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-from app.db.base import Base
+from app.core.config import settings
+from app.core.database import Base
 import app.models  # noqa: F401 — ensures all models are imported for autogenerate
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 target_metadata = Base.metadata
 
