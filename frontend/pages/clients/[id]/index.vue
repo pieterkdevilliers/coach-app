@@ -20,8 +20,21 @@ interface ClientNote {
   createdAt: string
 }
 
+interface CallSummary {
+  id: string
+  title: string
+  calledAt: string
+  status: string
+  hasRecording: boolean
+  hasTranscript: boolean
+  hasSummary: boolean
+  actionStepsTotal: number
+  actionStepsComplete: number
+}
+
 const client = ref<Client | null>(null)
 const clientNotes = ref<ClientNote[]>([])
+const calls = ref<CallSummary[]>([])
 const loading = ref(true)
 const deleting = ref(false)
 const showDeleteDialog = ref(false)
@@ -32,9 +45,10 @@ const savingNote = ref(false)
 
 onMounted(async () => {
   try {
-    ;[client.value, clientNotes.value] = await Promise.all([
+    ;[client.value, clientNotes.value, calls.value] = await Promise.all([
       apiFetch<Client>(`/api/clients/${clientId}`),
       apiFetch<ClientNote[]>(`/api/clients/${clientId}/notes`),
+      apiFetch<CallSummary[]>(`/api/clients/${clientId}/calls`),
     ])
   } catch {
     error.value = 'Client not found'
@@ -134,49 +148,97 @@ function formatDate(iso: string) {
         </div>
       </div>
 
-      <!-- Notes -->
-      <h2 class="mb-3 text-lg font-semibold">Notes</h2>
+      <!-- Notes and Calls side by side -->
+      <div class="grid grid-cols-2 gap-6">
 
-      <form class="mb-6" @submit.prevent="addNote">
-        <textarea
-          v-model="newNote"
-          rows="3"
-          placeholder="Add a note…"
-          class="mb-2 w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <button
-          type="submit"
-          :disabled="savingNote || !newNote.trim()"
-          class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {{ savingNote ? 'Saving…' : 'Add note' }}
-        </button>
-      </form>
+        <!-- Notes -->
+        <div>
+          <h2 class="mb-3 text-lg font-semibold">Notes</h2>
 
-      <p v-if="clientNotes.length === 0" class="text-sm text-gray-400">No notes yet.</p>
-
-      <ul v-else class="space-y-3">
-        <li
-          v-for="note in clientNotes"
-          :key="note.id"
-          class="rounded-lg border p-4 text-sm"
-        >
-          <p class="mb-3 whitespace-pre-wrap">{{ note.content }}</p>
-          <div class="flex items-center justify-between text-xs text-gray-400">
-            <span>{{ note.createdByName }} · {{ formatDate(note.createdAt) }}</span>
+          <form class="mb-4" @submit.prevent="addNote">
+            <textarea
+              v-model="newNote"
+              rows="3"
+              placeholder="Add a note…"
+              class="mb-2 w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
             <button
-              class="text-red-400 hover:text-red-600"
-              @click="deleteNote(note.id)"
+              type="submit"
+              :disabled="savingNote || !newNote.trim()"
+              class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              Delete
+              {{ savingNote ? 'Saving…' : 'Add note' }}
             </button>
-          </div>
-        </li>
-      </ul>
+          </form>
 
-      <!-- Recordings — wired up when recording feature is complete -->
-      <h2 class="mb-3 mt-8 text-lg font-semibold">Recordings</h2>
-      <p class="text-sm text-gray-400">No recordings yet.</p>
+          <p v-if="clientNotes.length === 0" class="text-sm text-gray-400">No notes yet.</p>
+
+          <ul v-else class="space-y-3">
+            <li
+              v-for="note in clientNotes"
+              :key="note.id"
+              class="rounded-lg border p-4 text-sm"
+            >
+              <p class="mb-3 whitespace-pre-wrap">{{ note.content }}</p>
+              <div class="flex items-center justify-between text-xs text-gray-400">
+                <span>{{ note.createdByName }} · {{ formatDate(note.createdAt) }}</span>
+                <button class="text-red-400 hover:text-red-600" @click="deleteNote(note.id)">
+                  Delete
+                </button>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Calls -->
+        <div>
+          <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">Calls</h2>
+            <NuxtLink
+              :to="`/clients/${clientId}/calls/new`"
+              class="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              New Call
+            </NuxtLink>
+          </div>
+
+          <p v-if="calls.length === 0" class="text-sm text-gray-400">No calls yet.</p>
+
+          <div v-else class="space-y-2">
+            <NuxtLink
+              v-for="call in calls"
+              :key="call.id"
+              :to="`/calls/${call.id}`"
+              class="flex items-center justify-between rounded-lg border p-4 text-sm hover:bg-gray-50"
+            >
+              <div>
+                <p class="font-medium">{{ call.title }}</p>
+                <p class="text-xs text-gray-400">
+                  {{ new Date(call.calledAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) }}
+                </p>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-gray-400">
+                <span v-if="call.hasRecording" title="Has recording">🎙</span>
+                <span v-if="call.hasTranscript" title="Has transcript">📄</span>
+                <span v-if="call.hasSummary" title="Has summary">✨</span>
+                <span v-if="call.actionStepsTotal">
+                  {{ call.actionStepsComplete }}/{{ call.actionStepsTotal }}
+                </span>
+                <span
+                  class="rounded-full px-2 py-0.5 capitalize"
+                  :class="{
+                    'bg-gray-100 text-gray-600': call.status === 'pending',
+                    'bg-blue-100 text-blue-700': call.status === 'processing',
+                    'bg-green-100 text-green-700': call.status === 'complete',
+                    'bg-red-100 text-red-600': call.status === 'failed',
+                  }"
+                >{{ call.status }}</span>
+              </div>
+            </NuxtLink>
+          </div>
+        </div>
+
+      </div>
 
       <ConfirmDialog
         v-model="showDeleteDialog"

@@ -11,13 +11,22 @@ class Transcript(Base):
     __tablename__ = "transcripts"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    recording_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("recordings.id"), nullable=False, unique=True
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calls.id"), nullable=False, unique=True, index=True
+    )
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("businesses.id"), nullable=False, index=True
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )

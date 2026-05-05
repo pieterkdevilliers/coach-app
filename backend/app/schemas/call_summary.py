@@ -4,14 +4,13 @@ from uuid import UUID
 from app.schemas._base import CamelResponse, CamelSchema
 
 
-class TranscriptUpsert(CamelSchema):
+class CallSummaryUpsert(CamelSchema):
     content: str
 
 
-class TranscriptResponse(CamelResponse):
+class CallSummaryResponse(CamelResponse):
     id: UUID
     call_id: UUID
     content: str
-    word_count: int | None
     created_at: datetime
     updated_at: datetime

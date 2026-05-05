@@ -7,13 +7,10 @@ from app.core.config import settings
 from app.api.routes import (
     auth,
     call_types,
+    calls,
     client_notes,
     clients,
-    extractions,
     invitations,
-    queries,
-    recordings,
-    transcripts,
     users,
 )
 
@@ -40,10 +37,7 @@ app.include_router(client_notes.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(invitations.router, prefix="/api")
 app.include_router(call_types.router, prefix="/api")
-app.include_router(recordings.router, prefix="/api")
-app.include_router(transcripts.router, prefix="/api")
-app.include_router(extractions.router, prefix="/api")
-app.include_router(queries.router, prefix="/api")
+app.include_router(calls.router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])
