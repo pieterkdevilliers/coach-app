@@ -44,6 +44,67 @@ const addingStep = ref(false)
 const showDeleteCall = ref(false)
 const deletingCall = ref(false)
 
+// Recording upload
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploadProgress = ref(0)
+const uploadState = ref<'idle' | 'uploading' | 'confirming' | 'done' | 'error'>('idle')
+const uploadError = ref('')
+
+async function handleFileChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+
+  uploadError.value = ''
+  uploadState.value = 'uploading'
+  uploadProgress.value = 0
+
+  try {
+    // Step 1 — get pre-signed PUT URL from backend
+    const { uploadUrl, s3Key } = await apiFetch<{ uploadUrl: string; s3Key: string }>(
+      `/api/calls/${callId}/recording/presign`,
+      { method: 'POST', body: { file_name: file.name, content_type: file.type || 'application/octet-stream' } }
+    )
+
+    // Step 2 — PUT directly to S3 (XHR for progress tracking)
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', uploadUrl)
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) uploadProgress.value = Math.round((ev.loaded / ev.total) * 100)
+      }
+      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`S3 upload failed: ${xhr.status}`)))
+      xhr.onerror = () => reject(new Error('Network error during S3 upload'))
+      xhr.send(file)
+    })
+
+    uploadState.value = 'confirming'
+
+    // Step 3 — confirm with backend, get presigned read URL
+    const confirmed = await apiFetch<{ fileName: string; s3Key: string; presignedReadUrl: string }>(
+      `/api/calls/${callId}/recording/confirm`,
+      { method: 'POST', body: { s3_key: s3Key, file_name: file.name } }
+    )
+
+    call.value!.recording = { id: '', fileName: confirmed.fileName, s3Key: confirmed.s3Key }
+    uploadState.value = 'done'
+  } catch (err: unknown) {
+    uploadError.value = (err as { data?: { detail?: string }; message?: string })?.data?.detail
+      ?? (err as Error)?.message
+      ?? 'Upload failed'
+    uploadState.value = 'error'
+  } finally {
+    if (fileInput.value) fileInput.value.value = ''
+  }
+}
+
+async function removeRecording() {
+  await apiFetch(`/api/calls/${callId}/recording`, { method: 'DELETE' })
+  call.value!.recording = null
+  uploadState.value = 'idle'
+  uploadProgress.value = 0
+}
+
 onMounted(async () => {
   try {
     call.value = await apiFetch<Call>(`/api/calls/${callId}`)
@@ -201,18 +262,52 @@ const completedSteps = computed(() =>
       <!-- Recording -->
       <section class="mb-6">
         <h2 class="mb-3 text-lg font-semibold">Recording</h2>
+
+        <!-- Already uploaded -->
         <div v-if="call.recording" class="flex items-center justify-between rounded-lg border p-4 text-sm">
           <span class="font-medium">{{ call.recording.fileName }}</span>
-          <button
-            class="text-xs text-red-500 hover:underline"
-            @click="apiFetch(`/api/calls/${callId}/recording`, { method: 'DELETE' }).then(() => call!.recording = null)"
-          >
+          <button class="text-xs text-red-500 hover:underline" @click="removeRecording">
             Remove
           </button>
         </div>
-        <p v-else class="rounded-lg border border-dashed p-4 text-center text-sm text-gray-400">
-          No recording attached. File upload will be available once AWS S3 is configured.
-        </p>
+
+        <!-- Upload UI -->
+        <div v-else class="rounded-lg border p-5">
+          <!-- Idle / pick file -->
+          <div v-if="uploadState === 'idle' || uploadState === 'error'" class="text-center">
+            <p class="mb-3 text-sm text-gray-500">Audio or video file — uploaded directly to S3, bypassing Cloudflare.</p>
+            <label class="inline-block cursor-pointer rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+              Choose file
+              <input
+                ref="fileInput"
+                type="file"
+                accept="audio/*,video/*"
+                class="hidden"
+                @change="handleFileChange"
+              />
+            </label>
+            <p v-if="uploadError" class="mt-2 text-xs text-red-600">{{ uploadError }}</p>
+          </div>
+
+          <!-- Uploading to S3 -->
+          <div v-else-if="uploadState === 'uploading'" class="space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <span class="text-gray-600">Uploading to S3…</span>
+              <span class="font-medium">{{ uploadProgress }}%</span>
+            </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                class="h-full rounded-full bg-blue-600 transition-all"
+                :style="{ width: `${uploadProgress}%` }"
+              />
+            </div>
+          </div>
+
+          <!-- Confirming with backend -->
+          <p v-else-if="uploadState === 'confirming'" class="text-center text-sm text-gray-500">
+            Saving recording…
+          </p>
+        </div>
       </section>
 
       <!-- Transcript -->

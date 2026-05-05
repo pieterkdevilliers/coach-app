@@ -27,5 +27,12 @@ class Settings(BaseSettings):
         "http://localhost:3000",
     ]
 
+    aws_region: str = "eu-west-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_s3_bucket: str = ""
+    aws_s3_upload_expires: int = 900   # 15 min — for the browser PUT
+    aws_s3_read_expires: int = 14400   # 4 hr  — for Scribe API GET
+
 
 settings = Settings()

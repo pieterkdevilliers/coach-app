@@ -24,13 +24,11 @@ services:
       - recordings_data:/data/recordings
     ports:
       - "8013:8000"
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://coach:coach@postgres:5432/coach
-      SCRIBE_API_URL: http://scribe-api:8012
-      SCRIBE_API_KEY: ${SCRIBE_API_KEY:-changeme}
       FILE_STORAGE_PATH: /data/recordings
-      MAX_UPLOAD_SIZE_MB: 1000
-      API_KEY: ${API_KEY:-changeme}
     depends_on:
       postgres:
         condition: service_healthy

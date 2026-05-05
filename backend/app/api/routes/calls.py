@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.call import Call, CallStatus
 from app.models.call_summary import CallSummary
@@ -23,9 +24,16 @@ from app.schemas.call import (
     SummaryInCall,
     TranscriptInCall,
 )
+from app.core import s3_client as s3
 from app.schemas.call_summary import CallSummaryResponse, CallSummaryUpsert
 from app.schemas.next_action_step import ActionStepCreate, ActionStepResponse, ActionStepUpdate
-from app.schemas.recording import RecordingCreate, RecordingResponse
+from app.schemas.recording import (
+    PresignUploadRequest,
+    PresignUploadResponse,
+    RecordingConfirmRequest,
+    RecordingConfirmResponse,
+    RecordingResponse,
+)
 from app.schemas.transcript import TranscriptResponse, TranscriptUpsert
 
 router = APIRouter(tags=["calls"])
@@ -211,34 +219,81 @@ async def delete_call(
 
 # ── Recording ─────────────────────────────────────────────────────────────
 
-@router.post(
-    "/calls/{call_id}/recording",
-    response_model=RecordingResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def attach_recording(
+@router.post("/calls/{call_id}/recording/presign", response_model=PresignUploadResponse)
+async def presign_recording_upload(
     call_id: UUID,
-    payload: RecordingCreate,
+    payload: PresignUploadRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> RecordingResponse:
+) -> PresignUploadResponse:
+    """Generate a pre-signed S3 PUT URL for direct browser-to-S3 upload."""
     call = await _get_call_or_404(db, call_id, current_user.business_id)
 
     existing = (await db.execute(
         select(Recording).where(Recording.call_id == call_id)
     )).scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recording already attached")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A recording is already attached to this call. Remove it first.",
+        )
+
+    s3_key = s3.build_s3_key(
+        str(call.business_id), str(call_id), payload.file_name
+    )
+    upload_url = await s3.presign_upload(s3_key, payload.content_type)
+
+    return PresignUploadResponse(
+        upload_url=upload_url,
+        s3_key=s3_key,
+        expires_in=settings.aws_s3_upload_expires,
+    )
+
+
+@router.post(
+    "/calls/{call_id}/recording/confirm",
+    response_model=RecordingConfirmResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_recording_upload(
+    call_id: UUID,
+    payload: RecordingConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> RecordingConfirmResponse:
+    """Called after the browser finishes the S3 upload. Saves the recording
+    and returns a pre-signed GET URL for the Scribe API."""
+    call = await _get_call_or_404(db, call_id, current_user.business_id)
+
+    existing = (await db.execute(
+        select(Recording).where(Recording.call_id == call_id)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Recording already confirmed for this call.",
+        )
 
     recording = Recording(
         call_id=call_id,
         business_id=call.business_id,
         file_name=payload.file_name,
+        s3_key=payload.s3_key,
     )
     db.add(recording)
     await db.commit()
     await db.refresh(recording)
-    return RecordingResponse.model_validate(recording)
+
+    presigned_read_url = await s3.presign_read(payload.s3_key)
+
+    return RecordingConfirmResponse(
+        id=recording.id,
+        call_id=recording.call_id,
+        file_name=recording.file_name,
+        s3_key=recording.s3_key,
+        presigned_read_url=presigned_read_url,
+        created_at=recording.created_at,
+    )
 
 
 @router.delete("/calls/{call_id}/recording", status_code=status.HTTP_204_NO_CONTENT)
