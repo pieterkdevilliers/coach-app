@@ -1,12 +1,10 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from app.schemas._base import CamelResponse
 
 
-class ExtractionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class ExtractionResponse(CamelResponse):
     id: UUID
     recording_id: UUID
     prompt_used: str

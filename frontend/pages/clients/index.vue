@@ -1,6 +1,5 @@
 <script setup lang="ts">
 const { apiFetch } = useAuthFetch()
-const authStore = useAuthStore()
 
 interface Client {
   id: string
@@ -14,7 +13,6 @@ interface Client {
 const clients = ref<Client[]>([])
 const loading = ref(true)
 const error = ref('')
-const search = ref('')
 
 onMounted(async () => {
   try {
@@ -25,28 +23,12 @@ onMounted(async () => {
     loading.value = false
   }
 })
-
-const filtered = computed(() => {
-  const q = search.value.toLowerCase().trim()
-  if (!q) return clients.value
-  return clients.value.filter(
-    (c) =>
-      c.fullName.toLowerCase().includes(q) ||
-      c.company?.toLowerCase().includes(q) ||
-      c.email?.toLowerCase().includes(q),
-  )
-})
 </script>
 
 <template>
   <div class="p-6">
     <div class="mb-6 flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-bold">Clients</h1>
-        <p v-if="authStore.user" class="mt-0.5 text-sm text-gray-500">
-          Welcome back, {{ authStore.user.fullName }}
-        </p>
-      </div>
+      <h1 class="text-2xl font-bold">Clients</h1>
       <NuxtLink
         to="/clients/new"
         class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
@@ -55,27 +37,9 @@ const filtered = computed(() => {
       </NuxtLink>
     </div>
 
-    <div class="mb-4 flex items-center gap-4">
-      <input
-        v-model="search"
-        type="search"
-        placeholder="Search by name, company or email…"
-        class="w-full max-w-sm rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
-      <span v-if="!loading" class="shrink-0 text-sm text-gray-400">
-        {{ filtered.length }} {{ filtered.length === 1 ? 'client' : 'clients' }}
-      </span>
-    </div>
-
     <p v-if="loading" class="text-sm text-gray-400">Loading…</p>
     <p v-else-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <p v-else-if="clients.length === 0" class="text-sm text-gray-400">
-      No clients yet.
-      <NuxtLink to="/clients/new" class="text-blue-600 hover:underline">Add your first client.</NuxtLink>
-    </p>
-    <p v-else-if="filtered.length === 0" class="text-sm text-gray-400">
-      No clients match "{{ search }}".
-    </p>
+    <p v-else-if="clients.length === 0" class="text-sm text-gray-400">No clients yet.</p>
 
     <div v-else class="overflow-hidden rounded-lg border">
       <table class="w-full text-sm">
@@ -89,7 +53,7 @@ const filtered = computed(() => {
         </thead>
         <tbody class="divide-y">
           <tr
-            v-for="client in filtered"
+            v-for="client in clients"
             :key="client.id"
             class="cursor-pointer hover:bg-gray-50"
             @click="navigateTo(`/clients/${client.id}`)"

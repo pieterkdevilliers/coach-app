@@ -16,5 +16,16 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 1000
     api_key: str = "changeme"
 
+    jwt_secret_key: str = "dev-secret-key-change-in-production"
+    jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 7
+    invite_token_expire_days: int = 7
+
+    cors_origins: list[str] = [
+        "https://ee-coach-app.expertecho.ai",
+        "http://localhost:3013",
+        "http://localhost:3000",
+    ]
+
 
 settings = Settings()

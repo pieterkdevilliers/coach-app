@@ -19,6 +19,15 @@ class Recording(Base):
     __tablename__ = "recordings"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clients.id"), nullable=False, index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
     call_type_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("call_types.id"), nullable=False
     )
