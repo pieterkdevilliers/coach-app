@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.services import scribe as scribe_service
 from app.api.routes import (
     auth,
     call_types,
@@ -17,7 +18,13 @@ from app.api.routes import (
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Tables are managed exclusively by Alembic migrations.
+    # Re-launch polling for any calls that were still processing on last shutdown.
+    # Wrapped so a DB hiccup at startup never prevents the app from serving requests.
+    try:
+        await scribe_service.restart_pending()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("restart_pending failed at startup: %s", exc)
     yield
 
 

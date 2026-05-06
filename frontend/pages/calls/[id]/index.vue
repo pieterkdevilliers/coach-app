@@ -44,6 +44,21 @@ const addingStep = ref(false)
 const showDeleteCall = ref(false)
 const deletingCall = ref(false)
 
+// Scribe submission
+const submittingToScribe = ref(false)
+
+async function sendToScribe() {
+  submittingToScribe.value = true
+  try {
+    await apiFetch(`/api/calls/${callId}/scribe/submit`, { method: 'POST' })
+    call.value!.status = 'processing'
+  } catch (e: unknown) {
+    alert((e as { data?: { detail?: string } })?.data?.detail ?? 'Failed to submit to Scribe')
+  } finally {
+    submittingToScribe.value = false
+  }
+}
+
 // Recording upload
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploadProgress = ref(0)
@@ -140,7 +155,47 @@ async function deleteTranscript() {
   call.value!.transcript = null
 }
 
-// Summary
+// Summary — structured rendering
+const SKIP_SUMMARY_KEYS = new Set(['next_actions', 'transcript'])
+
+interface SummaryField {
+  key: string
+  label: string
+  value: string | string[]
+  type: 'text' | 'list'
+}
+
+const summaryFields = computed<SummaryField[]>(() => {
+  const content = call.value?.summary?.content
+  if (!content) return []
+  try {
+    const data = JSON.parse(content)
+    if (typeof data !== 'object' || Array.isArray(data)) throw new Error()
+    return Object.entries(data)
+      .filter(([key]) => !SKIP_SUMMARY_KEYS.has(key))
+      .map(([key, val]) => {
+        const isArray = Array.isArray(val)
+        return {
+          key,
+          label: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          value: isArray
+            ? (val as unknown[]).map((item) =>
+                typeof item === 'string'
+                  ? item
+                  : Object.values(item as Record<string, unknown>)
+                      .filter((v) => v != null && v !== '')
+                      .join(' — ')
+              )
+            : String(val ?? ''),
+          type: (isArray ? 'list' : 'text') as 'text' | 'list',
+        }
+      })
+      .filter(({ type, value }) => type === 'list' || (value as string).length > 0)
+  } catch {
+    return [{ key: 'content', label: 'Summary', value: content, type: 'text' }]
+  }
+})
+
 function startEditSummary() {
   summaryDraft.value = call.value?.summary?.content ?? ''
   editingSummary.value = true
@@ -259,16 +314,47 @@ const completedSteps = computed(() =>
         <p class="whitespace-pre-wrap">{{ call.notes }}</p>
       </div>
 
-      <!-- Recording -->
+      <!-- Recording (full width) -->
       <section class="mb-6">
         <h2 class="mb-3 text-lg font-semibold">Recording</h2>
 
         <!-- Already uploaded -->
-        <div v-if="call.recording" class="flex items-center justify-between rounded-lg border p-4 text-sm">
-          <span class="font-medium">{{ call.recording.fileName }}</span>
-          <button class="text-xs text-red-500 hover:underline" @click="removeRecording">
-            Remove
-          </button>
+        <div v-if="call.recording" class="rounded-lg border p-4">
+          <div class="flex items-center justify-between text-sm">
+            <span class="font-medium">{{ call.recording.fileName }}</span>
+            <button class="text-xs text-red-500 hover:underline" @click="removeRecording">
+              Remove
+            </button>
+          </div>
+
+          <!-- Send to Scribe -->
+          <div class="mt-3 border-t pt-3">
+            <div v-if="call.status === 'processing'" class="flex items-center gap-2 text-sm text-blue-600">
+              <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+              Processing with AI Scribe… check back in a few minutes.
+            </div>
+            <div v-else-if="call.status === 'complete'" class="text-sm text-green-600">
+              ✓ Processed by AI Scribe
+            </div>
+            <div v-else-if="call.status === 'failed'" class="flex items-center justify-between">
+              <span class="text-sm text-red-600">Scribe processing failed</span>
+              <button
+                :disabled="submittingToScribe"
+                class="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                @click="sendToScribe"
+              >
+                {{ submittingToScribe ? 'Submitting…' : 'Retry' }}
+              </button>
+            </div>
+            <button
+              v-else
+              :disabled="submittingToScribe"
+              class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              @click="sendToScribe"
+            >
+              {{ submittingToScribe ? 'Submitting…' : 'Send to AI Scribe' }}
+            </button>
+          </div>
         </div>
 
         <!-- Upload UI -->
@@ -310,161 +396,193 @@ const completedSteps = computed(() =>
         </div>
       </section>
 
-      <!-- Transcript -->
-      <section class="mb-6">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Transcript</h2>
-          <div class="flex gap-2">
-            <button
-              v-if="!editingTranscript"
-              class="rounded border px-3 py-1 text-xs hover:bg-gray-50"
-              @click="startEditTranscript"
-            >
-              {{ call.transcript ? 'Edit' : 'Add' }}
-            </button>
-            <button
-              v-if="call.transcript && !editingTranscript"
-              class="rounded border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
-              @click="deleteTranscript"
-            >
-              Delete
-            </button>
-          </div>
+      <!-- Two-column: left = summary + actions, right = transcript -->
+      <div class="flex gap-6 items-start">
+
+        <!-- Left column: Summary + Action Steps -->
+        <div class="min-w-0 flex-1 space-y-6">
+
+          <!-- Summary -->
+          <section>
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-lg font-semibold">Summary</h2>
+              <div class="flex gap-2">
+                <button
+                  v-if="!editingSummary"
+                  class="rounded border px-3 py-1 text-xs hover:bg-gray-50"
+                  @click="startEditSummary"
+                >
+                  {{ call.summary ? 'Edit' : 'Add' }}
+                </button>
+                <button
+                  v-if="call.summary && !editingSummary"
+                  class="rounded border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                  @click="deleteSummary"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            <div v-if="editingSummary" class="space-y-2">
+              <textarea
+                v-model="summaryDraft"
+                rows="6"
+                class="w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div class="flex gap-2">
+                <button
+                  :disabled="savingSummary"
+                  class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  @click="saveSummary"
+                >
+                  {{ savingSummary ? 'Saving…' : 'Save' }}
+                </button>
+                <button
+                  class="rounded border px-4 py-1.5 text-sm hover:bg-gray-50"
+                  @click="editingSummary = false"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+            <div v-else-if="call.summary" class="space-y-4">
+              <div
+                v-for="field in summaryFields"
+                :key="field.key"
+                class="rounded-lg border p-4 text-sm"
+              >
+                <p class="mb-1.5 font-medium text-gray-700">{{ field.label }}</p>
+                <ul v-if="field.type === 'list'" class="space-y-1 text-gray-600">
+                  <li
+                    v-for="(item, i) in (field.value as string[])"
+                    :key="i"
+                    class="flex gap-2"
+                  >
+                    <span class="mt-0.5 shrink-0 text-gray-400">•</span>
+                    <span>{{ item }}</span>
+                  </li>
+                  <li v-if="(field.value as string[]).length === 0" class="text-gray-400">None noted.</li>
+                </ul>
+                <p v-else class="whitespace-pre-wrap text-gray-600">{{ field.value }}</p>
+              </div>
+            </div>
+            <p v-else class="text-sm text-gray-400">No summary yet.</p>
+          </section>
+
+          <!-- Action Steps -->
+          <section>
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-lg font-semibold">Next Action Steps</h2>
+              <span v-if="call.actionSteps.length" class="text-xs text-gray-400">
+                {{ completedSteps }} / {{ call.actionSteps.length }} complete
+              </span>
+            </div>
+
+            <ul class="mb-3 space-y-2">
+              <li
+                v-for="step in call.actionSteps"
+                :key="step.id"
+                class="flex items-start gap-3 rounded-lg border px-4 py-3 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  :checked="step.isComplete"
+                  class="mt-0.5 h-4 w-4 cursor-pointer rounded"
+                  @change="toggleStep(step)"
+                />
+                <span
+                  class="flex-1"
+                  :class="step.isComplete ? 'text-gray-400 line-through' : ''"
+                >
+                  {{ step.description }}
+                </span>
+                <button
+                  class="shrink-0 text-xs text-red-400 hover:text-red-600"
+                  @click="deleteStep(step.id)"
+                >
+                  Delete
+                </button>
+              </li>
+            </ul>
+
+            <form class="flex gap-2" @submit.prevent="addStep">
+              <input
+                v-model="newStep"
+                type="text"
+                placeholder="Add an action step…"
+                class="flex-1 rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="submit"
+                :disabled="addingStep || !newStep.trim()"
+                class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Add
+              </button>
+            </form>
+          </section>
+
         </div>
 
-        <div v-if="editingTranscript" class="space-y-2">
-          <textarea
-            v-model="transcriptDraft"
-            rows="10"
-            class="w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <div class="flex gap-2">
-            <button
-              :disabled="savingTranscript"
-              class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-              @click="saveTranscript"
-            >
-              {{ savingTranscript ? 'Saving…' : 'Save' }}
-            </button>
-            <button
-              class="rounded border px-4 py-1.5 text-sm hover:bg-gray-50"
-              @click="editingTranscript = false"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-        <div v-else-if="call.transcript" class="rounded-lg border p-4">
-          <p class="mb-2 whitespace-pre-wrap text-sm">{{ call.transcript.content }}</p>
-          <p v-if="call.transcript.wordCount" class="text-xs text-gray-400">
-            {{ call.transcript.wordCount.toLocaleString() }} words
-          </p>
-        </div>
-        <p v-else class="text-sm text-gray-400">No transcript yet.</p>
-      </section>
+        <!-- Right column: Transcript (sticky, fills viewport height) -->
+        <div class="w-5/12 shrink-0 sticky top-6">
+          <section>
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-lg font-semibold">Transcript</h2>
+              <div class="flex gap-2">
+                <button
+                  v-if="!editingTranscript"
+                  class="rounded border px-3 py-1 text-xs hover:bg-gray-50"
+                  @click="startEditTranscript"
+                >
+                  {{ call.transcript ? 'Edit' : 'Add' }}
+                </button>
+                <button
+                  v-if="call.transcript && !editingTranscript"
+                  class="rounded border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                  @click="deleteTranscript"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
 
-      <!-- Summary -->
-      <section class="mb-6">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Summary</h2>
-          <div class="flex gap-2">
-            <button
-              v-if="!editingSummary"
-              class="rounded border px-3 py-1 text-xs hover:bg-gray-50"
-              @click="startEditSummary"
-            >
-              {{ call.summary ? 'Edit' : 'Add' }}
-            </button>
-            <button
-              v-if="call.summary && !editingSummary"
-              class="rounded border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
-              @click="deleteSummary"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-
-        <div v-if="editingSummary" class="space-y-2">
-          <textarea
-            v-model="summaryDraft"
-            rows="6"
-            class="w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <div class="flex gap-2">
-            <button
-              :disabled="savingSummary"
-              class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-              @click="saveSummary"
-            >
-              {{ savingSummary ? 'Saving…' : 'Save' }}
-            </button>
-            <button
-              class="rounded border px-4 py-1.5 text-sm hover:bg-gray-50"
-              @click="editingSummary = false"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-        <p v-else-if="call.summary" class="whitespace-pre-wrap rounded-lg border p-4 text-sm">
-          {{ call.summary.content }}
-        </p>
-        <p v-else class="text-sm text-gray-400">No summary yet.</p>
-      </section>
-
-      <!-- Action Steps -->
-      <section class="mb-6">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Next Action Steps</h2>
-          <span v-if="call.actionSteps.length" class="text-xs text-gray-400">
-            {{ completedSteps }} / {{ call.actionSteps.length }} complete
-          </span>
+            <div v-if="editingTranscript" class="space-y-2">
+              <textarea
+                v-model="transcriptDraft"
+                rows="20"
+                class="w-full rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div class="flex gap-2">
+                <button
+                  :disabled="savingTranscript"
+                  class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  @click="saveTranscript"
+                >
+                  {{ savingTranscript ? 'Saving…' : 'Save' }}
+                </button>
+                <button
+                  class="rounded border px-4 py-1.5 text-sm hover:bg-gray-50"
+                  @click="editingTranscript = false"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+            <div v-else-if="call.transcript" class="rounded-lg border">
+              <div class="h-[calc(100vh-12rem)] overflow-y-auto p-4">
+                <p class="whitespace-pre-wrap text-sm">{{ call.transcript.content }}</p>
+              </div>
+              <div v-if="call.transcript.wordCount" class="border-t px-4 py-2 text-xs text-gray-400">
+                {{ call.transcript.wordCount.toLocaleString() }} words
+              </div>
+            </div>
+            <p v-else class="text-sm text-gray-400">No transcript yet.</p>
+          </section>
         </div>
 
-        <ul class="mb-3 space-y-2">
-          <li
-            v-for="step in call.actionSteps"
-            :key="step.id"
-            class="flex items-start gap-3 rounded-lg border px-4 py-3 text-sm"
-          >
-            <input
-              type="checkbox"
-              :checked="step.isComplete"
-              class="mt-0.5 h-4 w-4 cursor-pointer rounded"
-              @change="toggleStep(step)"
-            />
-            <span
-              class="flex-1"
-              :class="step.isComplete ? 'text-gray-400 line-through' : ''"
-            >
-              {{ step.description }}
-            </span>
-            <button
-              class="shrink-0 text-xs text-red-400 hover:text-red-600"
-              @click="deleteStep(step.id)"
-            >
-              Delete
-            </button>
-          </li>
-        </ul>
-
-        <form class="flex gap-2" @submit.prevent="addStep">
-          <input
-            v-model="newStep"
-            type="text"
-            placeholder="Add an action step…"
-            class="flex-1 rounded border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            type="submit"
-            :disabled="addingStep || !newStep.trim()"
-            class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            Add
-          </button>
-        </form>
-      </section>
+      </div>
 
       <ConfirmDialog
         v-model="showDeleteCall"
